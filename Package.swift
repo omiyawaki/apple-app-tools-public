@@ -44,6 +44,7 @@ let package = Package(
             name: "AppleAppToolsTests",
             dependencies: [
                 "AppleAppBlueprint",
+                "AppleAppDesignSystem",
                 "LocalAppUpdateKit",
                 "MacAppPackager"
             ]

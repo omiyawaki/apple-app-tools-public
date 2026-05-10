@@ -1,6 +1,14 @@
 import LocalAppUpdateKit
 import SwiftUI
 
+struct LocalAppUpdateToolbarButtonMetrics {
+    static let iconPointSize: CGFloat = 13
+    static let contentSideLength: CGFloat = 20
+    static let cornerRadius: CGFloat = 8
+    static let usesCircularBorderShape = false
+    static let usesExplicitGlassButtonStyle = false
+}
+
 public struct LocalAppUpdateToolbarButton: View {
     @ObservedObject private var controller: LocalAppUpdateController
 
@@ -20,8 +28,8 @@ public struct LocalAppUpdateToolbarButton: View {
                 } label: {
                     buttonContent
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
+                .buttonStyle(.plain)
+                .controlSize(.small)
                 .help(helpText)
                 .accessibilityLabel(accessibilityLabel)
                 .disabled(isDisabled)
@@ -41,13 +49,16 @@ public struct LocalAppUpdateToolbarButton: View {
                     .tint(statusColor)
             default:
                 Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: LocalAppUpdateToolbarButtonMetrics.iconPointSize, weight: .semibold))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(statusColor)
             }
         }
-        .frame(width: 24, height: 24)
-        .contentShape(Circle())
+        .frame(
+            width: LocalAppUpdateToolbarButtonMetrics.contentSideLength,
+            height: LocalAppUpdateToolbarButtonMetrics.contentSideLength
+        )
+        .contentShape(RoundedRectangle(cornerRadius: LocalAppUpdateToolbarButtonMetrics.cornerRadius, style: .continuous))
     }
 
     private var isDisabled: Bool {
