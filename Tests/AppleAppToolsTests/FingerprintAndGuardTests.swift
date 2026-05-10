@@ -57,10 +57,100 @@ final class FingerprintAndGuardTests: XCTestCase {
         XCTAssertEqual(LocalAppUpdateStatus.compare(metadata: metadata, currentFingerprint: "old"), .upToDate)
     }
 
+    func testUpdateDecisionRelaunchesWhenInstalledBundleIsNewerThanRunningApp() {
+        let running = metadata(sourceFingerprint: "old", builtAt: "2026-05-08T12:00:00Z")
+        let installed = metadata(sourceFingerprint: "new", builtAt: "2026-05-08T12:05:00Z")
+
+        let decision = LocalAppUpdateDecision.evaluate(
+            runningMetadata: running,
+            installedMetadata: installed,
+            currentSourceFingerprint: "new"
+        )
+
+        XCTAssertEqual(decision.status, .updateAvailable)
+        XCTAssertEqual(decision.action, .relaunchInstalledBundle)
+    }
+
+    func testUpdateDecisionRelaunchesWhenInstalledBundleHasSameSourceButNewerBuild() {
+        let running = metadata(sourceFingerprint: "same", builtAt: "2026-05-08T12:00:00Z")
+        let installed = metadata(sourceFingerprint: "same", builtAt: "2026-05-08T12:05:00Z")
+
+        let decision = LocalAppUpdateDecision.evaluate(
+            runningMetadata: running,
+            installedMetadata: installed,
+            currentSourceFingerprint: "same"
+        )
+
+        XCTAssertEqual(decision.status, .updateAvailable)
+        XCTAssertEqual(decision.action, .relaunchInstalledBundle)
+    }
+
+    func testUpdateDecisionDeploysWhenSourceIsNewerThanInstalledBundle() {
+        let running = metadata(sourceFingerprint: "old", builtAt: "2026-05-08T12:00:00Z")
+        let installed = metadata(sourceFingerprint: "new", builtAt: "2026-05-08T12:05:00Z")
+
+        let decision = LocalAppUpdateDecision.evaluate(
+            runningMetadata: running,
+            installedMetadata: installed,
+            currentSourceFingerprint: "newer-than-installed"
+        )
+
+        XCTAssertEqual(decision.status, .updateAvailable)
+        XCTAssertEqual(decision.action, .deployAndRelaunch)
+    }
+
+    func testUpdateDecisionTreatsMatchingRunningAndInstalledMetadataAsCurrent() {
+        let running = metadata(sourceFingerprint: "current", builtAt: "2026-05-08T12:00:00Z")
+        let installed = metadata(sourceFingerprint: "current", builtAt: "2026-05-08T12:00:00Z")
+
+        let decision = LocalAppUpdateDecision.evaluate(
+            runningMetadata: running,
+            installedMetadata: installed,
+            currentSourceFingerprint: "current"
+        )
+
+        XCTAssertEqual(decision.status, .upToDate)
+        XCTAssertNil(decision.action)
+    }
+
+    @MainActor
+    func testUpdateControllerKeepsLaunchMetadataWhenBundleMetadataChangesOnDisk() async {
+        let launched = metadata(sourceFingerprint: "old", builtAt: "2026-05-08T12:00:00Z")
+        let overwritten = metadata(sourceFingerprint: "new", builtAt: "2026-05-08T12:05:00Z")
+        var bundleMetadata = launched
+        let controller = LocalAppUpdateController(
+            runningMetadataLoader: { bundleMetadata },
+            installedMetadataLoader: { _ in bundleMetadata },
+            currentFingerprintLoader: { _ in "new" }
+        )
+
+        bundleMetadata = overwritten
+        await controller.checkForUpdates()
+
+        XCTAssertEqual(controller.status, .updateAvailable)
+        XCTAssertEqual(controller.metadata, launched)
+        XCTAssertEqual(controller.installedMetadata, overwritten)
+    }
+
     private func temporaryDirectory() -> URL {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func metadata(sourceFingerprint: String, builtAt: String) -> LocalAppBuildMetadata {
+        LocalAppBuildMetadata(
+            schemaVersion: 1,
+            appID: "sample",
+            projectRoot: "/tmp/sample",
+            blueprintPath: "/tmp/sample/AppleAppBlueprint.yaml",
+            bundlePath: "~/Applications/Sample.app",
+            deployCommand: "./build-app.sh",
+            sourceFingerprint: sourceFingerprint,
+            gitHead: "abc",
+            gitDirty: false,
+            builtAt: builtAt
+        )
     }
 }

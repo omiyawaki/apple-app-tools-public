@@ -9,24 +9,45 @@ public struct LocalAppUpdateToolbarButton: View {
     }
 
     public var body: some View {
-        if controller.isUpdateVisible {
-            Button {
-                controller.installUpdateAndRelaunch()
-            } label: {
-                switch controller.status {
-                case .updating, .checking:
-                    ProgressView()
-                        .controlSize(.small)
-                case .failed:
-                    Label("Update", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
-                default:
-                    Label("Update", systemImage: "arrow.down.circle.fill")
+        ZStack {
+            Color.clear
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+
+            if controller.isUpdateVisible {
+                Button {
+                    controller.installUpdateAndRelaunch()
+                } label: {
+                    buttonContent
                 }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .help(helpText)
+                .accessibilityLabel(accessibilityLabel)
+                .disabled(isDisabled)
             }
-            .help(helpText)
-            .disabled(isDisabled)
-            .tint(.accentColor)
         }
+        .task {
+            await controller.monitorForUpdates()
+        }
+    }
+
+    private var buttonContent: some View {
+        Group {
+            switch controller.status {
+            case .updating, .checking:
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(statusColor)
+            default:
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(statusColor)
+            }
+        }
+        .frame(width: 24, height: 24)
+        .contentShape(Circle())
     }
 
     private var isDisabled: Bool {
@@ -35,10 +56,31 @@ public struct LocalAppUpdateToolbarButton: View {
         return false
     }
 
+    private var statusColor: Color {
+        if case .failed = controller.status {
+            return .red
+        }
+        return .orange
+    }
+
+    private var systemImage: String {
+        if case .failed = controller.status {
+            return "exclamationmark.arrow.triangle.2.circlepath"
+        }
+        return "arrow.down"
+    }
+
     private var helpText: String {
         if case .failed(let message) = controller.status {
             return "Update failed: \(message)"
         }
         return "Install local update and reopen"
+    }
+
+    private var accessibilityLabel: String {
+        if case .failed = controller.status {
+            return "Update failed"
+        }
+        return "Update"
     }
 }
