@@ -9,4 +9,5 @@ App-specific views belong in the app repo and should be listed in
 `AppleAppBlueprint.yaml` under `localModules`.
 
 The first shared control is `LocalAppUpdateToolbarItem`, which gives local apps
-a consistent update affordance.
+a consistent update affordance using the system-native macOS glass button
+treatment.

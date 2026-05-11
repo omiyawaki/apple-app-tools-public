@@ -1,10 +1,11 @@
 import LocalAppUpdateKit
+import AppKit
 import SwiftUI
 
 struct LocalAppUpdateToolbarButtonMetrics {
-    static let iconPointSize: CGFloat = 15
-    static let usesCircularBorderShape = true
-    static let usesExplicitGlassButtonStyle = true
+    static let iconPointSize: CGFloat = 18
+    static let controlSideLength: CGFloat = 44
+    static let usesNativeAppKitGlassBezel = true
     static let hidesSharedToolbarBackground = true
 }
 
@@ -42,38 +43,32 @@ public struct LocalAppUpdateToolbarButton: View {
                 .accessibilityHidden(true)
 
             if controller.isUpdateVisible {
-                Button {
-                    controller.installUpdateAndRelaunch()
-                } label: {
-                    buttonContent
+                Group {
+                    if isDisabled {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(statusColor)
+                    } else {
+                        LocalAppUpdateNativeGlassButton(
+                            systemImage: systemImage,
+                            statusNSColor: statusNSColor,
+                            helpText: helpText,
+                            accessibilityLabel: accessibilityLabel
+                        ) {
+                            controller.installUpdateAndRelaunch()
+                        }
+                        .frame(
+                            width: LocalAppUpdateToolbarButtonMetrics.controlSideLength,
+                            height: LocalAppUpdateToolbarButtonMetrics.controlSideLength
+                        )
+                    }
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.regular)
                 .help(helpText)
                 .accessibilityLabel(accessibilityLabel)
-                .disabled(isDisabled)
             }
         }
         .task {
             await controller.monitorForUpdates()
-        }
-    }
-
-    private var buttonContent: some View {
-        Group {
-            switch controller.status {
-            case .updating, .checking:
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(statusColor)
-            default:
-                Label(accessibilityLabel, systemImage: systemImage)
-                    .labelStyle(.iconOnly)
-                    .font(.system(size: LocalAppUpdateToolbarButtonMetrics.iconPointSize, weight: .semibold))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(statusColor)
-            }
         }
     }
 
@@ -88,6 +83,13 @@ public struct LocalAppUpdateToolbarButton: View {
             return .red
         }
         return .orange
+    }
+
+    private var statusNSColor: NSColor {
+        if case .failed = controller.status {
+            return .systemRed
+        }
+        return .systemOrange
     }
 
     private var systemImage: String {
@@ -109,5 +111,66 @@ public struct LocalAppUpdateToolbarButton: View {
             return "Update failed"
         }
         return "Update"
+    }
+}
+
+private struct LocalAppUpdateNativeGlassButton: NSViewRepresentable {
+    let systemImage: String
+    let statusNSColor: NSColor
+    let helpText: String
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(
+            image: image,
+            target: context.coordinator,
+            action: #selector(Coordinator.performAction)
+        )
+        button.bezelStyle = .glass
+        button.controlSize = .extraLarge
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.isBordered = true
+        configure(button, context: context)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+        button.image = image
+        configure(button, context: context)
+    }
+
+    private var image: NSImage {
+        NSImage(systemSymbolName: systemImage, accessibilityDescription: accessibilityLabel) ?? NSImage()
+    }
+
+    private func configure(_ button: NSButton, context: Context) {
+        let sizeConfiguration = NSImage.SymbolConfiguration(
+            pointSize: LocalAppUpdateToolbarButtonMetrics.iconPointSize,
+            weight: .semibold
+        )
+        let colorConfiguration = NSImage.SymbolConfiguration(hierarchicalColor: statusNSColor)
+        button.symbolConfiguration = sizeConfiguration.applying(colorConfiguration)
+        button.contentTintColor = statusNSColor
+        button.toolTip = helpText
+        button.setAccessibilityLabel(accessibilityLabel)
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func performAction() {
+            action()
+        }
     }
 }
