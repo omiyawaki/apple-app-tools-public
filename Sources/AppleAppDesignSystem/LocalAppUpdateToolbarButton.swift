@@ -4,7 +4,7 @@ import SwiftUI
 struct LocalAppUpdateToolbarButtonMetrics {
     static let iconPointSize: CGFloat = 13
     static let usesCircularBorderShape = false
-    static let usesExplicitGlassButtonStyle = true
+    static let usesExplicitGlassButtonStyle = false
 }
 
 public struct LocalAppUpdateToolbarButton: View {
@@ -26,7 +26,6 @@ public struct LocalAppUpdateToolbarButton: View {
                 } label: {
                     buttonContent
                 }
-                .buttonStyle(.glass)
                 .controlSize(.small)
                 .help(helpText)
                 .accessibilityLabel(accessibilityLabel)
