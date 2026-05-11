@@ -2,18 +2,22 @@ import XCTest
 @testable import AppleAppDesignSystem
 
 final class DesignSystemTests: XCTestCase {
-    func testLocalUpdateToolbarButtonUsesToolbarProvidedLiquidGlassPattern() {
-        XCTAssertEqual(LocalAppUpdateToolbarButtonMetrics.iconPointSize, 13)
-        XCTAssertFalse(LocalAppUpdateToolbarButtonMetrics.usesCircularBorderShape)
-        XCTAssertFalse(LocalAppUpdateToolbarButtonMetrics.usesExplicitGlassButtonStyle)
+    func testLocalUpdateToolbarButtonUsesStandaloneCircularGlassPattern() {
+        XCTAssertEqual(LocalAppUpdateToolbarButtonMetrics.iconPointSize, 15)
+        XCTAssertTrue(LocalAppUpdateToolbarButtonMetrics.usesCircularBorderShape)
+        XCTAssertTrue(LocalAppUpdateToolbarButtonMetrics.usesExplicitGlassButtonStyle)
+        XCTAssertTrue(LocalAppUpdateToolbarButtonMetrics.hidesSharedToolbarBackground)
     }
 
     func testLocalUpdateToolbarButtonDoesNotHandRollToolbarChrome() throws {
         let source = try String(contentsOf: localUpdateToolbarButtonSourceURL(), encoding: .utf8)
 
-        XCTAssertFalse(source.contains(".buttonStyle(.glass)"))
+        XCTAssertTrue(source.contains("public struct LocalAppUpdateToolbarItem: ToolbarContent"))
+        XCTAssertTrue(source.contains(".sharedBackgroundVisibility(.hidden)"))
+        XCTAssertTrue(source.contains(".buttonStyle(.glass)"))
+        XCTAssertTrue(source.contains(".buttonBorderShape(.circle)"))
+        XCTAssertTrue(source.contains(".controlSize(.regular)"))
         XCTAssertFalse(source.contains(".buttonStyle(.plain)"))
-        XCTAssertFalse(source.contains(".buttonStyle("))
         XCTAssertFalse(source.contains("contentSideLength"))
         XCTAssertFalse(source.contains("cornerRadius"))
     }

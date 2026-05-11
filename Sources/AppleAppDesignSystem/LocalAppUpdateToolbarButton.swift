@@ -2,9 +2,30 @@ import LocalAppUpdateKit
 import SwiftUI
 
 struct LocalAppUpdateToolbarButtonMetrics {
-    static let iconPointSize: CGFloat = 13
-    static let usesCircularBorderShape = false
-    static let usesExplicitGlassButtonStyle = false
+    static let iconPointSize: CGFloat = 15
+    static let usesCircularBorderShape = true
+    static let usesExplicitGlassButtonStyle = true
+    static let hidesSharedToolbarBackground = true
+}
+
+public struct LocalAppUpdateToolbarItem: ToolbarContent {
+    @ObservedObject private var controller: LocalAppUpdateController
+    private let placement: ToolbarItemPlacement
+
+    public init(
+        placement: ToolbarItemPlacement = .primaryAction,
+        controller: LocalAppUpdateController
+    ) {
+        self.placement = placement
+        self.controller = controller
+    }
+
+    public var body: some ToolbarContent {
+        ToolbarItem(placement: placement) {
+            LocalAppUpdateToolbarButton(controller: controller)
+        }
+        .sharedBackgroundVisibility(.hidden)
+    }
 }
 
 public struct LocalAppUpdateToolbarButton: View {
@@ -26,7 +47,9 @@ public struct LocalAppUpdateToolbarButton: View {
                 } label: {
                     buttonContent
                 }
-                .controlSize(.small)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.regular)
                 .help(helpText)
                 .accessibilityLabel(accessibilityLabel)
                 .disabled(isDisabled)

@@ -48,7 +48,7 @@ public struct ComponentRegistry: Equatable {
                     importName: "AppleAppDesignSystem",
                     docsPath: "docs/macos-design-system.md",
                     integrationPoints: ["SwiftUI root views", "toolbar controls"],
-                    duplicatePatterns: ["LocalAppUpdateToolbarButton", "AppleAppDesignSystem", "shared app toolbar"]
+                    duplicatePatterns: ["LocalAppUpdateToolbarItem", "LocalAppUpdateToolbarButton", "AppleAppDesignSystem", "shared app toolbar"]
                 )
             ]
         )

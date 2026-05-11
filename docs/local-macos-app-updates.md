@@ -17,12 +17,13 @@ bundle path. This lets an already-running app notice that another process has
 deployed a newer app bundle after it launched. In that stale-running-app case,
 the update action relaunches the installed bundle without rebuilding.
 
-Apps should expose updates with `LocalAppUpdateToolbarButton` in the trailing
-toolbar. The button is hidden when the app is current, shows an icon-only
-circular Liquid Glass button with an orange `arrow.down` when a local update is
-available, shows an in-button spinner while updating, and uses a red warning
-symbol if the update fails. Orange is intentionally distinct from blue selection
-and accent affordances in the host app.
+Apps should expose updates with `LocalAppUpdateToolbarItem` in the trailing
+toolbar. The item hides the shared toolbar background and presents a standalone
+icon-only circular Liquid Glass button with an orange `arrow.down` when a local
+update is available. The button is hidden when the app is current, shows an
+in-button spinner while updating, and uses a red warning symbol if the update
+fails. Orange is intentionally distinct from blue selection and accent
+affordances in the host app.
 
 `LocalAppUpdateToolbarButton` runs the shared update monitor while it is mounted,
 so apps do not need to create their own polling timers. Calling
