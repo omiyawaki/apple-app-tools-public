@@ -203,18 +203,27 @@ enum TailscaleOps {
     // The Tailscale.app bundle ships two argv[0]-dispatched modes from the same
     // inode: "Tailscale" boots the GUI helper and fails under a minimal launchd
     // env, "tailscale" is the standalone CLI that talks to tailscaled directly.
-    // Prefer the wrapper at /usr/local/bin/tailscale which already invokes the
-    // lowercase form, then fall back to the lowercase path directly.
+    // Even with the lowercase path, the CLI binary's mode-detection fails when
+    // execed directly under a minimal env (parent process group, controlling
+    // context, or similar). Invoking through /bin/sh -c reliably puts it in
+    // CLI mode regardless of caller env. Prefer /usr/local/bin/tailscale when
+    // present (already a sh-wrapper), otherwise wrap the lowercase path here.
     static let tailscaleWrapper = "/usr/local/bin/tailscale"
     static let tailscaleLowercase = "/Applications/Tailscale.app/Contents/MacOS/tailscale"
 
-    static func resolvedExecutable() -> String {
-        if FileManager.default.isExecutableFile(atPath: tailscaleWrapper) { return tailscaleWrapper }
-        return tailscaleLowercase
+    static func runTailscale(_ args: [String], timeoutSeconds: TimeInterval = 5) throws -> ProcessResult {
+        let executable: String
+        if FileManager.default.isExecutableFile(atPath: tailscaleWrapper) {
+            executable = tailscaleWrapper
+        } else {
+            executable = tailscaleLowercase
+        }
+        let quoted = ([executable] + args).map { "'\($0.replacingOccurrences(of: "'", with: "'\\''"))'" }.joined(separator: " ")
+        return try AutoDeployHelpers.run("/bin/sh", ["-c", quoted], timeoutSeconds: timeoutSeconds)
     }
 
     static func ip4(forPeer name: String) throws -> String {
-        let result = try AutoDeployHelpers.run(resolvedExecutable(), ["ip", "-4", name], timeoutSeconds: 5)
+        let result = try runTailscale(["ip", "-4", name])
         guard result.succeeded else {
             throw TailscaleError.commandFailed("ip -4 \(name)", result.stderr)
         }
@@ -229,7 +238,7 @@ enum TailscaleOps {
     }
 
     static func ip4Self() throws -> String {
-        let result = try AutoDeployHelpers.run(resolvedExecutable(), ["ip", "-4"], timeoutSeconds: 5)
+        let result = try runTailscale(["ip", "-4"])
         guard result.succeeded else {
             throw TailscaleError.commandFailed("ip -4", result.stderr)
         }
@@ -245,7 +254,7 @@ enum TailscaleOps {
 
     static func whoisIsTailnet(remoteAddress: String) -> Bool {
         let host = remoteAddress.split(separator: ":").first.map(String.init) ?? remoteAddress
-        guard let result = try? AutoDeployHelpers.run(resolvedExecutable(), ["whois", host], timeoutSeconds: 5) else {
+        guard let result = try? runTailscale(["whois", host]) else {
             return false
         }
         return result.succeeded && result.stdout.contains("Machine:")
