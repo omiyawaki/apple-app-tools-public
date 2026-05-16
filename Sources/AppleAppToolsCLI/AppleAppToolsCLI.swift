@@ -9,7 +9,7 @@ struct AppleAppToolsCLI {
         do {
             var args = Array(CommandLine.arguments.dropFirst())
             guard let area = args.first else {
-                throw CLIError("Usage: apple-app-tools blueprint|mac|icon ...")
+                throw CLIError("Usage: apple-app-tools blueprint|mac|icon|auto-deploy ...")
             }
             args.removeFirst()
             switch area {
@@ -19,6 +19,8 @@ struct AppleAppToolsCLI {
                 try runMac(args)
             case "icon":
                 CommandLineTool.main(arguments: args)
+            case "auto-deploy":
+                try AutoDeploy.run(args)
             default:
                 throw CLIError("Unknown command area: \(area)")
             }

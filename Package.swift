@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "LocalAppUpdateKit", targets: ["LocalAppUpdateKit"]),
         .library(name: "MacAppPackager", targets: ["MacAppPackager"]),
         .library(name: "IconComposerBuild", targets: ["IconComposerBuild"]),
+        .library(name: "AutoDeployCore", targets: ["AutoDeployCore"]),
         .executable(name: "apple-app-tools", targets: ["AppleAppToolsCLI"]),
         .executable(name: "icon-composer-build", targets: ["IconComposerBuildCLI"])
     ],
@@ -28,12 +29,18 @@ let package = Package(
             dependencies: ["AppleAppBlueprint"]
         ),
         .target(name: "IconComposerBuild"),
+        .target(
+            name: "AutoDeployCore",
+            dependencies: ["LocalAppUpdateKit"]
+        ),
         .executableTarget(
             name: "AppleAppToolsCLI",
             dependencies: [
                 "AppleAppBlueprint",
                 "MacAppPackager",
-                "IconComposerBuild"
+                "IconComposerBuild",
+                "AutoDeployCore",
+                "LocalAppUpdateKit"
             ]
         ),
         .executableTarget(
@@ -46,7 +53,8 @@ let package = Package(
                 "AppleAppBlueprint",
                 "AppleAppDesignSystem",
                 "LocalAppUpdateKit",
-                "MacAppPackager"
+                "MacAppPackager",
+                "AutoDeployCore"
             ]
         )
     ]
