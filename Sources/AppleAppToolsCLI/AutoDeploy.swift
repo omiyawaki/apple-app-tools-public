@@ -265,6 +265,20 @@ enum AutoDeploy {
             print("[\(app.id)] source path \(source) is not a git repo, skipping")
             return
         }
+        // Opt-in tag gate: apps that declare `require_signed_tags: true` in
+        // the registry still pin auto-deploy to verified+signed tags. The
+        // default (everything else) follows `origin`'s default branch — this
+        // matches a solo push-to-main workflow and avoids the "I pushed an
+        // hour ago, why is the other Mac still on yesterday's bundle" trap.
+        let tagGated = app.requireSignedTags == true
+        if tagGated {
+            try catchUpFromTag(app, source: source)
+        } else {
+            try catchUpFromBranch(app, source: source)
+        }
+    }
+
+    private static func catchUpFromTag(_ app: PersonalApp, source: String) throws {
         try GitOps.fetchTags(at: source)
         guard let tag = try GitOps.newestVerifiedTag(at: source, appID: app.id) else {
             print("[\(app.id)] no verified tag, skipping")
@@ -281,13 +295,44 @@ enum AutoDeploy {
             print("[\(app.id)] already at \(tag.name)")
             return
         }
-        if let signed = app.requireSignedTags, signed,
-           try !GitOps.verifyTagSignature(at: source, tag: tag.name) {
+        if try !GitOps.verifyTagSignature(at: source, tag: tag.name) {
             throw AutoDeployError("tag \(tag.name) failed signature verification")
         }
+        try deploy(app: app, source: source, ref: tag.name, label: tag.name, cooldown: cooldown)
+    }
+
+    private static func catchUpFromBranch(_ app: PersonalApp, source: String) throws {
+        try GitOps.fetchOrigin(at: source)
+        let target = try GitOps.revParseOriginDefault(at: source)
+        let cooldown = CooldownStore()
+        if cooldown.isSuppressed(appID: app.id, tag: target.commit) {
+            print("[\(app.id)] \(target.ref)@\(target.commit) is in cooldown, skipping")
+            return
+        }
+        let installed = try? LocalAppBuildMetadata.loadFromAppBundle(path: app.bundlePath)
+        if let installedHead = installed?.gitHead, installedHead == target.commit {
+            print("[\(app.id)] already at \(target.ref) (\(target.commit))")
+            return
+        }
+        try deploy(
+            app: app,
+            source: source,
+            ref: target.commit,
+            label: "\(target.ref)@\(target.commit.prefix(8))",
+            cooldown: cooldown
+        )
+    }
+
+    private static func deploy(
+        app: PersonalApp,
+        source: String,
+        ref: String,
+        label: String,
+        cooldown: CooldownStore
+    ) throws {
         let paths = DeployPaths()
         let worktree = paths.deployCheckout(forAppID: app.id)
-        try GitOps.ensureWorktree(at: worktree, sourcePath: source, ref: tag.name)
+        try GitOps.ensureWorktree(at: worktree, sourcePath: source, ref: ref)
         let deployResult = try AutoDeployHelpers.run(
             "/bin/bash",
             ["-lc", app.deployCommand],
@@ -299,18 +344,18 @@ enum AutoDeploy {
             cooldown.clear(appID: app.id)
             AutoDeployHelpers.appendLog(
                 to: paths.autoDeployLog,
-                message: "deployed \(app.id) \(tag.name) ok"
+                message: "deployed \(app.id) \(label) ok"
             )
-            print("[\(app.id)] deployed \(tag.name)")
+            print("[\(app.id)] deployed \(label)")
         } else {
-            try cooldown.recordFailure(appID: app.id, tag: tag.name)
+            try cooldown.recordFailure(appID: app.id, tag: ref)
             let lastErr = deployResult.stderr.split(whereSeparator: \.isNewline).suffix(200).joined(separator: "\n")
             AutoDeployHelpers.appendLog(
                 to: paths.autoDeployLog,
-                message: "deploy failed \(app.id) \(tag.name) exit=\(deployResult.exitCode)\n\(lastErr)"
+                message: "deploy failed \(app.id) \(label) exit=\(deployResult.exitCode)\n\(lastErr)"
             )
-            postUserNotification(title: "\(app.name) auto-deploy failed", body: tag.name)
-            throw AutoDeployError("deploy failed for \(app.id) at \(tag.name) (exit \(deployResult.exitCode))")
+            postUserNotification(title: "\(app.name) auto-deploy failed", body: label)
+            throw AutoDeployError("deploy failed for \(app.id) at \(label) (exit \(deployResult.exitCode))")
         }
     }
 

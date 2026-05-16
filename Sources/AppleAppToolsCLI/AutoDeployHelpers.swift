@@ -131,6 +131,47 @@ enum GitOps {
         }
     }
 
+    static func fetchOrigin(at sourcePath: String) throws {
+        let result = try AutoDeployHelpers.run(git, ["fetch", "--quiet", "origin"], cwd: sourcePath)
+        guard result.succeeded else {
+            throw GitError.commandFailed("fetch origin", result.stderr)
+        }
+    }
+
+    /// Resolve the default branch on `origin` (whichever of main/master is
+    /// the symbolic-ref target). Falls back to `origin/main` then
+    /// `origin/master` if the symbolic ref isn't set locally.
+    static func revParseOriginDefault(at sourcePath: String) throws -> (ref: String, commit: String) {
+        let sym = try AutoDeployHelpers.run(
+            git,
+            ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
+            cwd: sourcePath
+        )
+        let ref: String
+        if sym.succeeded, !sym.trimmedStdout.isEmpty {
+            let full = sym.trimmedStdout
+            ref = full.hasPrefix("refs/remotes/")
+                ? String(full.dropFirst("refs/remotes/".count))
+                : full
+        } else {
+            let main = try AutoDeployHelpers.run(git, ["rev-parse", "--verify", "-q", "origin/main"], cwd: sourcePath)
+            if main.succeeded {
+                ref = "origin/main"
+            } else {
+                let master = try AutoDeployHelpers.run(git, ["rev-parse", "--verify", "-q", "origin/master"], cwd: sourcePath)
+                guard master.succeeded else {
+                    throw GitError.commandFailed("resolve origin/HEAD", "no origin/main or origin/master")
+                }
+                ref = "origin/master"
+            }
+        }
+        let commit = try AutoDeployHelpers.run(git, ["rev-parse", ref], cwd: sourcePath)
+        guard commit.succeeded else {
+            throw GitError.commandFailed("rev-parse \(ref)", commit.stderr)
+        }
+        return (ref, commit.trimmedStdout)
+    }
+
     static func newestVerifiedTag(at sourcePath: String, appID: String) throws -> VerifiedTag? {
         let pattern = VerifiedTag.appIDPattern(for: appID)
         let result = try AutoDeployHelpers.run(
