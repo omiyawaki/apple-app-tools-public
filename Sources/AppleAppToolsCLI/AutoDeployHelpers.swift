@@ -200,12 +200,17 @@ enum GitError: Error, CustomStringConvertible {
 }
 
 enum TailscaleOps {
-    static let tailscale = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-    static let tailscaleCLI = "/usr/local/bin/tailscale"
+    // The Tailscale.app bundle ships two argv[0]-dispatched modes from the same
+    // inode: "Tailscale" boots the GUI helper and fails under a minimal launchd
+    // env, "tailscale" is the standalone CLI that talks to tailscaled directly.
+    // Prefer the wrapper at /usr/local/bin/tailscale which already invokes the
+    // lowercase form, then fall back to the lowercase path directly.
+    static let tailscaleWrapper = "/usr/local/bin/tailscale"
+    static let tailscaleLowercase = "/Applications/Tailscale.app/Contents/MacOS/tailscale"
 
     static func resolvedExecutable() -> String {
-        if FileManager.default.isExecutableFile(atPath: tailscale) { return tailscale }
-        return tailscaleCLI
+        if FileManager.default.isExecutableFile(atPath: tailscaleWrapper) { return tailscaleWrapper }
+        return tailscaleLowercase
     }
 
     static func ip4(forPeer name: String) throws -> String {

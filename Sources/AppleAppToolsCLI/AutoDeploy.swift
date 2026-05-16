@@ -18,7 +18,7 @@ enum AutoDeploy {
         case "notify":
             try runNotify(rest)
         case "serve":
-            try runServe()
+            try runServe(rest)
         case "catch-up":
             try runCatchUp(rest)
         case "install-agents":
@@ -167,59 +167,69 @@ enum AutoDeploy {
 
     // MARK: serve
 
-    static func runServe() throws {
-        let raw = FileHandle.standardInput.readDataToEndOfFile()
-        do {
-            let parsed = try HTTPRequestParser.parse(raw)
-            guard parsed.method == "POST" else {
-                writeResponse(status: 405, reason: "Method Not Allowed", body: "method not allowed\n")
-                return
-            }
-            if let remote = peerAddressFromStdin(), !TailscaleOps.whoisIsTailnet(remoteAddress: remote) {
-                writeResponse(status: 403, reason: "Forbidden", body: "peer not in tailnet\n")
+    static func runServe(_ args: [String] = []) throws {
+        let options = CLIOptions(args)
+        let bind = try options.required("--bind")
+        let portString = try options.required("--port")
+        guard let port = UInt16(portString) else {
+            throw AutoDeployError("--port must be a 16-bit integer")
+        }
+        let listener = try SocketListener(bindAddress: bind, port: port)
+        AutoDeployHelpers.appendLog(
+            to: DeployPaths().autoDeployLog,
+            message: "serve listening on \(bind):\(port)"
+        )
+        signal(SIGPIPE, SIG_IGN)
+        while true {
+            let connection: SocketListener.AcceptedConnection
+            do {
+                connection = try listener.accept()
+            } catch {
                 AutoDeployHelpers.appendLog(
                     to: DeployPaths().autoDeployLog,
-                    message: "serve rejected non-tailnet peer \(remote)"
+                    message: "serve accept error: \(error)"
                 )
-                return
+                continue
+            }
+            defer { close(connection.fd) }
+            do {
+                let request = try connection.readAll(maxBytes: 64 * 1024)
+                let response = handleServeRequest(rawRequest: request, peerAddress: connection.peerAddress)
+                _ = try connection.writeAll(response)
+            } catch {
+                AutoDeployHelpers.appendLog(
+                    to: DeployPaths().autoDeployLog,
+                    message: "serve handler error from \(connection.peerAddress ?? "?"): \(error)"
+                )
+                let response = HTTPResponseBuilder.plain(status: 500, reason: "Internal Server Error", body: "\(error)\n")
+                _ = try? connection.writeAll(response)
+            }
+        }
+    }
+
+    static func handleServeRequest(rawRequest: Data, peerAddress: String?) -> Data {
+        do {
+            let parsed = try HTTPRequestParser.parse(rawRequest)
+            guard parsed.method == "POST" else {
+                return HTTPResponseBuilder.plain(status: 405, reason: "Method Not Allowed", body: "method not allowed\n")
+            }
+            if let peerAddress, !TailscaleOps.whoisIsTailnet(remoteAddress: peerAddress) {
+                AutoDeployHelpers.appendLog(
+                    to: DeployPaths().autoDeployLog,
+                    message: "serve rejected non-tailnet peer \(peerAddress)"
+                )
+                return HTTPResponseBuilder.plain(status: 403, reason: "Forbidden", body: "peer not in tailnet\n")
             }
             let payload = try NotifyPayload.decodeJSON(parsed.body)
             try runCatchUp(["--app", payload.appID])
-            writeResponse(status: 200, reason: "OK", body: "ok: \(payload.appID)\n")
+            return HTTPResponseBuilder.plain(status: 200, reason: "OK", body: "ok: \(payload.appID)\n")
         } catch {
-            writeResponse(status: 500, reason: "Internal Server Error", body: "\(error)\n")
             AutoDeployHelpers.appendLog(
                 to: DeployPaths().autoDeployLog,
                 message: "serve error: \(error)"
             )
+            return HTTPResponseBuilder.plain(status: 500, reason: "Internal Server Error", body: "\(error)\n")
         }
-    }
-
-    static func writeResponse(status: Int, reason: String, body: String) {
-        let data = HTTPResponseBuilder.plain(status: status, reason: reason, body: body)
-        FileHandle.standardOutput.write(data)
-    }
-
-    static func peerAddressFromStdin() -> String? {
-        var addr = sockaddr_storage()
-        var len = socklen_t(MemoryLayout<sockaddr_storage>.size)
-        let result = withUnsafeMutablePointer(to: &addr) { ptr -> Int32 in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                getpeername(0, sockPtr, &len)
-            }
-        }
-        guard result == 0 else { return nil }
-        var host = [UInt8](repeating: 0, count: Int(NI_MAXHOST))
-        let ni = withUnsafePointer(to: &addr) { ptr -> Int32 in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                host.withUnsafeMutableBufferPointer { buf in
-                    getnameinfo(sockPtr, len, buf.baseAddress.map { UnsafeMutablePointer<CChar>(OpaquePointer($0)) }, socklen_t(buf.count), nil, 0, NI_NUMERICHOST)
-                }
-            }
-        }
-        guard ni == 0 else { return nil }
-        let nullTerminated = host.prefix(while: { $0 != 0 })
-        return String(decoding: nullTerminated, as: UTF8.self)
     }
 
     // MARK: catch-up
@@ -248,6 +258,11 @@ enum AutoDeploy {
         let source = app.expandedSourcePath
         guard FileManager.default.fileExists(atPath: source) else {
             print("[\(app.id)] source path \(source) missing, skipping")
+            return
+        }
+        let gitDir = URL(fileURLWithPath: source).appendingPathComponent(".git").path
+        guard FileManager.default.fileExists(atPath: gitDir) else {
+            print("[\(app.id)] source path \(source) is not a git repo, skipping")
             return
         }
         try GitOps.fetchTags(at: source)
