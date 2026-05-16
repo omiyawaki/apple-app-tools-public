@@ -346,7 +346,7 @@ public final class LocalAppUpdateController: ObservableObject {
             paths,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.1,
-            UInt32(kFSEventStreamCreateFlagFileEvents)
+            UInt32(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
         ) else { return }
         FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)
