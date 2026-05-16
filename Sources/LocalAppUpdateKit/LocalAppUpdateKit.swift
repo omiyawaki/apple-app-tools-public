@@ -5,6 +5,10 @@ import Combine
 import AppKit
 #endif
 
+#if os(macOS)
+import CoreServices
+#endif
+
 public struct LocalAppBuildMetadata: Codable, Equatable, Sendable {
     public var schemaVersion: Int
     public var appID: String
@@ -157,6 +161,16 @@ public final class LocalAppUpdateController: ObservableObject {
     private let currentFingerprintLoader: ((LocalAppBuildMetadata) async throws -> String)?
     private var updateAction: LocalAppUpdateAction?
     private var monitorTask: Task<Void, Never>?
+    private var debounceTask: Task<Void, Never>?
+    private var pushTriggersStarted = false
+    private var isCurrentlyChecking = false
+
+    // FSEvents stream and notification observer are stored as
+    // nonisolated(unsafe) so deinit can tear them down without hopping
+    // back through MainActor isolation. Reads/writes from inside the
+    // class only happen on the main actor in practice.
+    private nonisolated(unsafe) var fsEventStream: OpaquePointer?
+    private nonisolated(unsafe) var didBecomeActiveObserver: NSObjectProtocol?
 
     public init(
         toolCommand: String = "/Users/example/tools/apple-app-tools/.build/release/apple-app-tools",
@@ -176,6 +190,19 @@ public final class LocalAppUpdateController: ObservableObject {
 
     deinit {
         monitorTask?.cancel()
+        debounceTask?.cancel()
+        #if os(macOS)
+        if let stream = fsEventStream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+        #endif
+        #if canImport(AppKit)
+        if let observer = didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        #endif
     }
 
     public var isUpdateVisible: Bool {
@@ -190,7 +217,12 @@ public final class LocalAppUpdateController: ObservableObject {
         startMonitoring()
     }
 
-    public func startMonitoring(every seconds: TimeInterval = 30) {
+    /// Backstop polling cadence. Push triggers (FSEvents + app-activation)
+    /// catch the realistic cases within milliseconds; this loop only exists
+    /// to cover edge cases where FSEvents misses an event (sleep/wake,
+    /// network volumes, APFS snapshot swaps). 5 min is cheap enough to
+    /// keep on, frequent enough that nothing stays unnoticed for long.
+    public func startMonitoring(every seconds: TimeInterval = 300) {
         guard monitorTask == nil || monitorTask?.isCancelled == true else { return }
         let interval = UInt64(max(seconds, 1) * 1_000_000_000)
         monitorTask = Task { [weak self] in
@@ -205,7 +237,7 @@ public final class LocalAppUpdateController: ObservableObject {
         }
     }
 
-    public func monitorForUpdates(every seconds: TimeInterval = 30) async {
+    public func monitorForUpdates(every seconds: TimeInterval = 300) async {
         startMonitoring(every: seconds)
         while !Task.isCancelled {
             do {
@@ -218,10 +250,17 @@ public final class LocalAppUpdateController: ObservableObject {
 
     private func performUpdateCheck() async {
         if case .updating = status { return }
+        // Coalesce overlapping checks. The fingerprint subprocess walks the
+        // source tree; a burst of FSEvents + a foreground activation +
+        // the initial .task can otherwise fire several concurrent walks.
+        if isCurrentlyChecking { return }
+        isCurrentlyChecking = true
+        defer { isCurrentlyChecking = false }
         status = .checking
         do {
             let loaded = try runningMetadataResult.get()
             metadata = loaded
+            startPushTriggers(projectRoot: loaded.projectRoot)
             let installed = try? installedMetadataLoader(loaded.bundlePath)
             installedMetadata = installed
             let current = try await currentSourceFingerprint(for: loaded)
@@ -240,6 +279,110 @@ public final class LocalAppUpdateController: ObservableObject {
             status = .failed(error.localizedDescription)
         }
     }
+
+    private func startPushTriggers(projectRoot: String) {
+        guard !pushTriggersStarted else { return }
+        pushTriggersStarted = true
+        startFSEventsWatcher(projectRoot: projectRoot)
+        startActivationObserver()
+    }
+
+    private func scheduleDebouncedCheck() {
+        debounceTask?.cancel()
+        debounceTask = Task { [weak self] in
+            // 250ms swallows the burst of file events that a single
+            // `git pull` / `git checkout` / multi-file save produces, so
+            // we only run the fingerprint subprocess once per logical
+            // change instead of once per touched file.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.performUpdateCheck()
+        }
+    }
+
+    private func startActivationObserver() {
+        #if canImport(AppKit)
+        guard didBecomeActiveObserver == nil else { return }
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.performUpdateCheck()
+            }
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    private func startFSEventsWatcher(projectRoot: String) {
+        let path = NSString(string: projectRoot).expandingTildeInPath
+        let paths = [path] as CFArray
+        var context = FSEventStreamContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+        let callback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
+            guard let info else { return }
+            let controller = Unmanaged<LocalAppUpdateController>
+                .fromOpaque(info).takeUnretainedValue()
+            let pathsArray = unsafeBitCast(eventPaths, to: NSArray.self)
+                as? [String] ?? []
+            // FSEventStreamSetDispatchQueue(.main) below puts us on the
+            // main thread, but Swift concurrency can't infer that — hop
+            // explicitly into MainActor to touch controller state.
+            MainActor.assumeIsolated {
+                controller.handleFileSystemEvents(paths: pathsArray)
+            }
+        }
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault,
+            callback,
+            &context,
+            paths,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.1,
+            UInt32(kFSEventStreamCreateFlagFileEvents)
+        ) else { return }
+        FSEventStreamSetDispatchQueue(stream, .main)
+        FSEventStreamStart(stream)
+        fsEventStream = stream
+    }
+
+    private func handleFileSystemEvents(paths: [String]) {
+        let hasRelevant = paths.contains(
+            where: LocalAppUpdateController.isFingerprintRelevant
+        )
+        guard hasRelevant else { return }
+        scheduleDebouncedCheck()
+    }
+
+    /// FSEvents on a recursive watch picks up everything under projectRoot,
+    /// including paths that never feed the fingerprint hash. Filter those
+    /// out so we don't re-run the fingerprint subprocess on every Xcode
+    /// build, every `git fetch`, every editor swap file save.
+    private nonisolated static func isFingerprintRelevant(_ path: String) -> Bool {
+        let ignoredSegments = [
+            "/.build/", "/.git/", "/.swiftpm/", "/.apple-app-tools/",
+            "/xcuserdata/", "/DerivedData/", "/node_modules/"
+        ]
+        if ignoredSegments.contains(where: { path.contains($0) }) {
+            return false
+        }
+        let name = (path as NSString).lastPathComponent
+        if name == ".DS_Store" { return false }
+        if name.hasSuffix(".swp") || name.hasSuffix(".swo") { return false }
+        if name.hasPrefix(".#") { return false } // emacs lockfile
+        if name.hasSuffix("~") { return false } // editor backup
+        return true
+    }
+    #else
+    private func startFSEventsWatcher(projectRoot: String) {}
+    #endif
 
     private func currentSourceFingerprint(for metadata: LocalAppBuildMetadata) async throws -> String {
         if let currentFingerprintLoader {
