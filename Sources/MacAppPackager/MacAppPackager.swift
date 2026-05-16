@@ -74,12 +74,66 @@ public struct MacAppPackager {
     }
 
     private func sign(bundle: URL) {
-        let identity = ProcessInfo.processInfo.environment["APPLE_APP_SIGN_IDENTITY"] ?? ""
-        if identity.isEmpty {
-            _ = run(URL(fileURLWithPath: "/usr/bin/codesign"), ["--force", "--deep", "--sign", "-", bundle.path])
+        // Resolution order:
+        //   1. APPLE_APP_SIGN_IDENTITY env var (explicit override)
+        //   2. The first installed code-signing identity, preferring
+        //      Developer ID Application > Apple Development > Mac Developer.
+        //   3. Ad-hoc ("-") only if no identity is available.
+        //
+        // Stable signing matters because macOS keychain ACLs (e.g. the
+        // "<App> WebCrypto Master Key" item WKWebView creates) are bound
+        // to the app's signing identity. Ad-hoc signing keys those ACLs
+        // to the per-binary cdhash, which changes on every rebuild, so
+        // the user gets prompted for keychain access after every
+        // `./build-app.sh`. With a real (Apple Development or Developer
+        // ID) cert the signing identity is stable across rebuilds and
+        // the "Always Allow" decision sticks.
+        let identity = signingIdentity()
+        let codesign = URL(fileURLWithPath: "/usr/bin/codesign")
+        if identity == "-" {
+            FileHandle.standardError.write(Data(
+                "warning: no code-signing identity found, falling back to ad-hoc; keychain prompts will repeat on every rebuild\n".utf8))
+            _ = run(codesign, ["--force", "--deep", "--sign", "-", bundle.path])
         } else {
-            _ = run(URL(fileURLWithPath: "/usr/bin/codesign"), ["--force", "--deep", "--options", "runtime", "--sign", identity, bundle.path])
+            FileHandle.standardError.write(Data(
+                "codesign: \(identity)\n".utf8))
+            _ = run(codesign, ["--force", "--deep", "--options", "runtime", "--sign", identity, bundle.path])
         }
+    }
+
+    private func signingIdentity() -> String {
+        let env = ProcessInfo.processInfo.environment["APPLE_APP_SIGN_IDENTITY"] ?? ""
+        if !env.isEmpty { return env }
+
+        // `security find-identity -v -p codesigning` prints lines like:
+        //   1) ABCDEF... "Apple Development: Name (TEAMID)"
+        // Newest-first; we pick the most-trusted match. Quoted SHA + name.
+        let output = run(
+            URL(fileURLWithPath: "/usr/bin/security"),
+            ["find-identity", "-v", "-p", "codesigning"]
+        ) ?? ""
+        let candidates: [String] = output
+            .split(separator: "\n")
+            .compactMap { line in
+                guard let firstQuote = line.firstIndex(of: "\""),
+                      let lastQuote = line.lastIndex(of: "\""),
+                      firstQuote != lastQuote
+                else { return nil }
+                let name = line[line.index(after: firstQuote)..<lastQuote]
+                return String(name)
+            }
+        let priorities: [String] = [
+            "Developer ID Application",
+            "Apple Development",
+            "Mac Developer",
+        ]
+        for prefix in priorities {
+            if let hit = candidates.first(where: { $0.hasPrefix(prefix) }) {
+                return hit
+            }
+        }
+        if let any = candidates.first { return any }
+        return "-"
     }
 
     private func register(bundle: URL) {
