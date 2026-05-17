@@ -6,12 +6,17 @@ public struct MacPackageOptions {
     public var binary: URL
     public var plist: URL
     public var resources: [URL]
+    /// Optional override for `blueprint.app.bundlePath`. Use when producing
+    /// a sibling-variant bundle (e.g. a headless companion at a different
+    /// path) from the same blueprint.
+    public var bundlePathOverride: URL?
 
-    public init(blueprintPath: URL, binary: URL, plist: URL, resources: [URL]) {
+    public init(blueprintPath: URL, binary: URL, plist: URL, resources: [URL], bundlePathOverride: URL? = nil) {
         self.blueprintPath = blueprintPath
         self.binary = binary
         self.plist = plist
         self.resources = resources
+        self.bundlePathOverride = bundlePathOverride
     }
 }
 
@@ -21,7 +26,8 @@ public struct MacAppPackager {
     public func package(options: MacPackageOptions) throws {
         let blueprint = try AppBlueprint.load(from: options.blueprintPath)
         try BlueprintValidator(registry: .defaultRegistry()).validate(blueprint)
-        let bundle = URL(fileURLWithPath: NSString(string: blueprint.app.bundlePath).expandingTildeInPath)
+        let bundle = options.bundlePathOverride
+            ?? URL(fileURLWithPath: NSString(string: blueprint.app.bundlePath).expandingTildeInPath)
         let contents = bundle.appendingPathComponent("Contents", isDirectory: true)
         let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
         let resources = contents.appendingPathComponent("Resources", isDirectory: true)

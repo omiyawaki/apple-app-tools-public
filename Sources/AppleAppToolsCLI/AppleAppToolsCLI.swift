@@ -71,12 +71,19 @@ struct AppleAppToolsCLI {
         case "package":
             let binary = try options.required("--binary")
             let plist = try options.required("--plist")
+            let bundlePathOverride: URL?
+            if let override = options.value("--bundle-path") {
+                bundlePathOverride = URL(fileURLWithPath: NSString(string: override).expandingTildeInPath)
+            } else {
+                bundlePathOverride = nil
+            }
             try MacAppPackager().package(
                 options: MacPackageOptions(
                     blueprintPath: URL(fileURLWithPath: config),
                     binary: URL(fileURLWithPath: binary),
                     plist: URL(fileURLWithPath: plist),
-                    resources: options.values("--resource").map { URL(fileURLWithPath: $0) }
+                    resources: options.values("--resource").map { URL(fileURLWithPath: $0) },
+                    bundlePathOverride: bundlePathOverride
                 )
             )
         default:
@@ -97,6 +104,10 @@ private struct Options {
             throw CLIError("Missing required option \(key)")
         }
         return value
+    }
+
+    func value(_ key: String) -> String? {
+        values(key).first
     }
 
     func values(_ key: String) -> [String] {
