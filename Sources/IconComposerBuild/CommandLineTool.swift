@@ -21,7 +21,7 @@ public enum CommandLineTool {
 
     public static let usage = """
     Usage:
-      icon-composer-build build --icon PATH --name AppIcon --out DIR [options]
+      apple-app-tools icon build --icon PATH --name AppIcon --out DIR [options]
 
     Options:
       --platform NAME                  Icon Composer platform. Default: macOS.

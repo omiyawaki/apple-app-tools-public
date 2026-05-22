@@ -26,8 +26,8 @@ swift run apple-app-tools icon build --icon Resources/AppIcon.icon --name AppIco
 - `AppleAppDesignSystem`: shared SwiftUI visual language.
 - `LocalAppUpdateKit`: local update detection and redeploy/reopen support.
 - `MacAppPackager`: shared `.app` bundle packaging and metadata writing.
-- `IconComposerBuild`: Icon Composer asset pipeline migrated from
-  `~/tools/icon-composer-build`.
+- `IconComposerBuild`: Icon Composer asset pipeline, exposed via the
+  `apple-app-tools icon build` command.
 
 ## Test
 
