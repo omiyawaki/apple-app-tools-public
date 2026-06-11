@@ -32,8 +32,8 @@ public struct MacAppPackager {
         let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
         let resources = contents.appendingPathComponent("Resources", isDirectory: true)
 
-        if FileManager.default.fileExists(atPath: contents.path) {
-            try FileManager.default.removeItem(at: contents)
+        if FileManager.default.fileExists(atPath: bundle.path) {
+            try FileManager.default.removeItem(at: bundle)
         }
         try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
@@ -50,7 +50,7 @@ public struct MacAppPackager {
         let metadata = try buildMetadata(blueprint: blueprint, blueprintPath: options.blueprintPath)
         let data = try JSONEncoder.pretty.encode(metadata)
         try data.write(to: resources.appendingPathComponent("LocalAppBuild.json"), options: .atomic)
-        sign(bundle: bundle)
+        try sign(bundle: bundle)
         register(bundle: bundle)
         try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: bundle.path)
     }
@@ -79,7 +79,7 @@ public struct MacAppPackager {
         try FileManager.default.copyItem(at: source, to: destination)
     }
 
-    private func sign(bundle: URL) {
+    private func sign(bundle: URL) throws {
         // Resolution order:
         //   1. APPLE_APP_SIGN_IDENTITY env var (explicit override)
         //   2. The first installed code-signing identity, preferring
@@ -99,12 +99,13 @@ public struct MacAppPackager {
         if identity == "-" {
             FileHandle.standardError.write(Data(
                 "warning: no code-signing identity found, falling back to ad-hoc; keychain prompts will repeat on every rebuild\n".utf8))
-            _ = run(codesign, ["--force", "--deep", "--sign", "-", bundle.path])
+            try runChecked(codesign, ["--force", "--deep", "--sign", "-", bundle.path])
         } else {
             FileHandle.standardError.write(Data(
                 "codesign: \(identity)\n".utf8))
-            _ = run(codesign, ["--force", "--deep", "--options", "runtime", "--sign", identity, bundle.path])
+            try runChecked(codesign, ["--force", "--deep", "--options", "runtime", "--sign", identity, bundle.path])
         }
+        try runChecked(codesign, ["--verify", "--deep", "--strict", "--verbose=2", bundle.path])
     }
 
     private func signingIdentity() -> String {
@@ -153,6 +154,11 @@ public struct MacAppPackager {
     }
 
     private func run(_ executable: URL, _ arguments: [String]) -> String? {
+        try? runChecked(executable, arguments)
+    }
+
+    @discardableResult
+    private func runChecked(_ executable: URL, _ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
@@ -163,9 +169,34 @@ public struct MacAppPackager {
             try process.run()
             process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8)
+            let output = String(data: data, encoding: .utf8) ?? ""
+            guard process.terminationStatus == 0 else {
+                throw MacAppPackagerError.commandFailed(
+                    executable: executable.path,
+                    arguments: arguments,
+                    status: process.terminationStatus,
+                    output: output
+                )
+            }
+            return output
         } catch {
-            return nil
+            throw error
+        }
+    }
+}
+
+public enum MacAppPackagerError: Error, CustomStringConvertible {
+    case commandFailed(executable: String, arguments: [String], status: Int32, output: String)
+
+    public var description: String {
+        switch self {
+        case .commandFailed(let executable, let arguments, let status, let output):
+            let command = ([executable] + arguments).joined(separator: " ")
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                return "Command failed with status \(status): \(command)"
+            }
+            return "Command failed with status \(status): \(command)\n\(trimmed)"
         }
     }
 }
