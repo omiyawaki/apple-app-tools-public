@@ -25,6 +25,50 @@ final class DesignSystemTests: XCTestCase {
         XCTAssertFalse(source.contains("controlSideLength"))
     }
 
+    func testIndexedScrollRailMapsVerticalLocationsToMarkers() {
+        XCTAssertNil(IndexedScrollRailLayout.markerIndex(
+            at: 40,
+            height: 100,
+            markerCount: 0
+        ))
+        XCTAssertEqual(IndexedScrollRailLayout.markerIndex(
+            at: -20,
+            height: 100,
+            markerCount: 5
+        ), 0)
+        XCTAssertEqual(IndexedScrollRailLayout.markerIndex(
+            at: 50,
+            height: 100,
+            markerCount: 5
+        ), 2)
+        XCTAssertEqual(IndexedScrollRailLayout.markerIndex(
+            at: 150,
+            height: 100,
+            markerCount: 5
+        ), 4)
+    }
+
+    func testIndexedScrollRailSamplingIncludesBothEnds() {
+        XCTAssertEqual(
+            IndexedScrollRailLayout.sampledIndices(markerCount: 10, maximumCount: 4),
+            [0, 3, 6, 9]
+        )
+    }
+
+    func testIndexedScrollRailMajorLabelsAreSampledFromMajorMarkersOnly() {
+        let markers = (0..<8).map { index in
+            IndexedScrollRailMarker(
+                id: String(index),
+                label: "Month \(index)",
+                majorLabel: index.isMultiple(of: 2) ? "Year \(index)" : nil
+            )
+        }
+        XCTAssertEqual(
+            IndexedScrollRailLayout.majorLabelIndices(markers: markers, maximumCount: 3),
+            [0, 4, 6]
+        )
+    }
+
     private func localUpdateToolbarButtonSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
