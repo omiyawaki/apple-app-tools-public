@@ -99,6 +99,18 @@ final class DesignSystemTests: XCTestCase {
         )
     }
 
+    func testIndexedScrollRailThinsCollisionsAndPreservesEndpoints() {
+        XCTAssertEqual(
+            IndexedScrollRailLayout.spacedIndices(
+                [0, 1, 2, 3, 4, 5],
+                normalizedPositions: [0, 0.02, 0.1, 0.5, 0.96, 1],
+                height: 400,
+                minimumSpacing: 20
+            ),
+            [0, 2, 3, 5]
+        )
+    }
+
     func testIndexedScrollRailKeepsContentOutOfRoundedEndCaps() {
         XCTAssertEqual(
             IndexedScrollRailLayout.verticalPosition(
@@ -115,6 +127,13 @@ final class DesignSystemTests: XCTestCase {
                 markerCount: 5
             ),
             400 - IndexedScrollRailLayout.contentInset
+        )
+        XCTAssertEqual(
+            IndexedScrollRailLayout.verticalPosition(
+                forNormalizedPosition: 0.25,
+                height: 400
+            ),
+            113
         )
     }
 
