@@ -6,17 +6,31 @@ public struct IndexedScrollRailMarker: Identifiable, Hashable, Sendable {
     public let id: String
     public let label: String
     public let majorLabel: String?
+    /// Optional normalized position of the destination in the scrollable
+    /// content. Clients can use this for constant-time pixel jumps instead of
+    /// resolving a semantic row identifier in a very large list.
+    public let destinationPosition: Double?
 
-    public init(id: String, label: String, majorLabel: String? = nil) {
+    public init(
+        id: String,
+        label: String,
+        majorLabel: String? = nil,
+        destinationPosition: Double? = nil
+    ) {
         self.id = id
         self.label = label
         self.majorLabel = majorLabel
+        self.destinationPosition = destinationPosition
     }
 }
 
 /// Pure geometry helpers used by `IndexedScrollRail` and available to clients
 /// that need to coordinate a custom scroll container.
 public enum IndexedScrollRailLayout {
+    public static let contentInset: CGFloat = 26
+    public static let magnificationRadius: CGFloat = 58
+    public static let magnificationFactor: CGFloat = 2.35
+
     public static func markerIndex(
         at verticalLocation: CGFloat,
         height: CGFloat,
@@ -45,31 +59,135 @@ public enum IndexedScrollRailLayout {
         markers: [IndexedScrollRailMarker],
         maximumCount: Int
     ) -> [Int] {
+        guard maximumCount > 0 else { return [] }
         let candidates = markers.indices.filter { markers[$0].majorLabel != nil }
         guard candidates.count > maximumCount else { return candidates }
-        return sampledIndices(
-            markerCount: candidates.count,
-            maximumCount: maximumCount
-        ).map { candidates[$0] }
+
+        // Keep the label cadence regular. Sampling by a rounded ratio can
+        // produce an alternating, visually unexplained sequence (for example
+        // 9 years, then 8, then 9). A fixed stride is predictable, while the
+        // final endpoint is retained when there is still room.
+        let stride = Int(ceil(Double(candidates.count) / Double(maximumCount)))
+        var result = Swift.stride(from: 0, to: candidates.count, by: stride)
+            .map { candidates[$0] }
+        if let last = candidates.last,
+           result.last != last,
+           result.count < maximumCount {
+            result.append(last)
+        }
+        return result
+    }
+
+    public static func tickStride(
+        markerCount: Int,
+        height: CGFloat,
+        minimumSpacing: CGFloat,
+        candidates: [Int],
+        minimumStride: Int = 1
+    ) -> Int {
+        guard markerCount > 1 else { return 1 }
+        let usableHeight = max(1, height - contentInset * 2)
+        let spacing = usableHeight / CGFloat(markerCount - 1)
+        let minimumStride = max(1, minimumStride)
+        let validCandidates = candidates.filter { $0 >= minimumStride }.sorted()
+        return validCandidates.first { spacing * CGFloat($0) >= minimumSpacing }
+            ?? max(
+                validCandidates.last ?? minimumStride,
+                minimumStride,
+                Int(ceil(minimumSpacing / spacing))
+            )
+    }
+
+    public static func tickIndices(
+        markerCount: Int,
+        stride: Int,
+        alignment: Int
+    ) -> [Int] {
+        guard markerCount > 0 else { return [] }
+        let stride = max(1, stride)
+        let alignment = min(max(alignment, 0), markerCount - 1)
+        var indices = Array(Swift.stride(from: alignment, to: markerCount, by: stride))
+        var preceding = alignment - stride
+        while preceding >= 0 {
+            indices.append(preceding)
+            preceding -= stride
+        }
+        indices.append(0)
+        indices.append(markerCount - 1)
+        return Array(Set(indices)).sorted()
+    }
+
+    public static func verticalPosition(
+        for index: Int,
+        height: CGFloat,
+        markerCount: Int
+    ) -> CGFloat {
+        guard markerCount > 1 else { return height / 2 }
+        let usableHeight = max(0, height - contentInset * 2)
+        return contentInset
+            + CGFloat(index) / CGFloat(markerCount - 1) * usableHeight
+    }
+
+    /// A monotonic local fisheye transform modelled after Dock
+    /// magnification. Positions nearest the pointer spread apart while the
+    /// edge of the magnification region remains fixed.
+    public static func magnifiedPosition(
+        _ position: CGFloat,
+        around hoverPosition: CGFloat?,
+        radius: CGFloat = magnificationRadius,
+        factor: CGFloat = magnificationFactor
+    ) -> CGFloat {
+        guard let hoverPosition, radius > 0, factor > 1 else { return position }
+        let delta = position - hoverPosition
+        let distance = abs(delta)
+        guard distance < radius, distance > 0 else { return position }
+        let normalized = distance / radius
+        let magnifiedDistance = radius * pow(normalized, 1 / factor)
+        return hoverPosition + (delta < 0 ? -magnifiedDistance : magnifiedDistance)
+    }
+
+    public static func influence(
+        at position: CGFloat,
+        around hoverPosition: CGFloat?,
+        radius: CGFloat = magnificationRadius
+    ) -> CGFloat {
+        guard let hoverPosition, radius > 0 else { return 0 }
+        let normalized = min(abs(position - hoverPosition) / radius, 1)
+        let cosine = cos(normalized * .pi / 2)
+        return cosine * cosine
     }
 }
 
 /// A compact, native-feeling chronology/index rail that complements rather
-/// than replaces the system scrollbar. Hovering or dragging expands the rail;
-/// a drag selects semantic destinations instead of estimating row offsets.
+/// than replaces the system scrollbar. It uses one Canvas for all tick marks,
+/// expands on hover, and applies Dock-like local magnification around the
+/// pointer. Drag selection is coalesced to one callback per display frame.
 public struct IndexedScrollRail: View {
     private let markers: [IndexedScrollRailMarker]
+    private let tickStrideCandidates: [Int]
+    private let minimumTickStride: Int
+    private let tickAlignment: Int
     private let onSelect: (IndexedScrollRailMarker) -> Void
 
     @State private var isHovering = false
+    @State private var hoverLocationY: CGFloat?
     @State private var isDragging = false
     @State private var selectedIndex: Int?
+    @State private var lastDispatchedIndex: Int?
+    @State private var pendingIndex: Int?
+    @State private var dispatchTask: Task<Void, Never>?
 
     public init(
         markers: [IndexedScrollRailMarker],
+        tickStrideCandidates: [Int] = [1, 2, 5, 10, 20, 50, 100],
+        minimumTickStride: Int = 1,
+        tickAlignment: Int = 0,
         onSelect: @escaping (IndexedScrollRailMarker) -> Void
     ) {
         self.markers = markers
+        self.tickStrideCandidates = tickStrideCandidates
+        self.minimumTickStride = max(1, minimumTickStride)
+        self.tickAlignment = tickAlignment
         self.onSelect = onSelect
     }
 
@@ -81,16 +199,20 @@ public struct IndexedScrollRail: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Timeline")
+        .accessibilityLabel("Publication timeline")
         .accessibilityValue(accessibilityValue)
         .accessibilityAdjustableAction { direction in
             adjustSelection(direction)
+        }
+        .onDisappear {
+            dispatchTask?.cancel()
+            dispatchTask = nil
         }
     }
 
     private var isExpanded: Bool { isHovering || isDragging }
 
-    private var railWidth: CGFloat { isExpanded ? 82 : 22 }
+    private var railWidth: CGFloat { isExpanded ? 104 : 22 }
 
     private var accessibilityValue: String {
         guard let selectedIndex, markers.indices.contains(selectedIndex) else {
@@ -99,115 +221,267 @@ public struct IndexedScrollRail: View {
         return markers[selectedIndex].label
     }
 
+    private var focusIndex: Int? {
+        if isDragging { return selectedIndex }
+        guard let hoverLocationY else { return nil }
+        return nearestIndex(to: hoverLocationY, height: currentHeight)
+    }
+
+    @State private var currentHeight: CGFloat = 0
+
     @ViewBuilder
     private func rail(height: CGFloat) -> some View {
         ZStack(alignment: .topTrailing) {
             if isExpanded {
-                Capsule(style: .continuous)
-                    .fill(.thinMaterial)
-                    .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.96))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                Color(nsColor: .separatorColor).opacity(0.55),
+                                lineWidth: 0.5
+                            )
+                    }
             }
 
-            tickMarks(height: height)
+            tickCanvas(height: height)
 
             if isExpanded {
                 majorLabels(height: height)
             }
 
-            if isDragging,
-               let selectedIndex,
-               markers.indices.contains(selectedIndex) {
-                selectionLabel(for: selectedIndex, height: height)
+            if isExpanded,
+               let focusIndex,
+               markers.indices.contains(focusIndex) {
+                focusLabel(for: focusIndex, height: height)
             }
         }
         .frame(width: railWidth, height: height)
         .contentShape(Rectangle())
-        .onHover { isHovering = $0 }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location):
+                isHovering = true
+                hoverLocationY = min(max(location.y, 0), height)
+            case .ended:
+                isHovering = false
+                hoverLocationY = nil
+            }
+        }
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
+                    let isFirstChange = !isDragging
                     isDragging = true
-                    select(at: value.location.y, height: height)
+                    isHovering = true
+                    hoverLocationY = min(max(value.location.y, 0), height)
+                    select(
+                        at: value.location.y,
+                        height: height,
+                        immediate: isFirstChange
+                    )
                 }
                 .onEnded { value in
-                    select(at: value.location.y, height: height)
+                    isHovering = true
+                    hoverLocationY = min(max(value.location.y, 0), height)
+                    select(at: value.location.y, height: height, immediate: true)
                     isDragging = false
                 }
         )
-        .animation(.snappy(duration: 0.16), value: isExpanded)
+        .animation(.snappy(duration: 0.14), value: isExpanded)
+        .onChange(of: height, initial: true) { _, newHeight in
+            currentHeight = newHeight
+        }
     }
 
-    @ViewBuilder
-    private func tickMarks(height: CGFloat) -> some View {
-        let sampled = IndexedScrollRailLayout.sampledIndices(
+    private func tickCanvas(height: CGFloat) -> some View {
+        let stride = IndexedScrollRailLayout.tickStride(
             markerCount: markers.count,
-            maximumCount: max(12, Int(height / 5))
+            height: height,
+            minimumSpacing: 3,
+            candidates: tickStrideCandidates,
+            minimumStride: minimumTickStride
         )
-        ForEach(sampled, id: \.self) { index in
-            let marker = markers[index]
-            Capsule(style: .continuous)
-                .fill(Color.secondary.opacity(marker.majorLabel == nil ? 0.38 : 0.72))
-                .frame(width: marker.majorLabel == nil ? 4 : (isExpanded ? 12 : 8), height: 1)
-                .position(
-                    x: railWidth - (isExpanded ? 10 : 6),
-                    y: verticalPosition(for: index, height: height)
+        let baseIndices = Set(IndexedScrollRailLayout.tickIndices(
+            markerCount: markers.count,
+            stride: stride,
+            alignment: tickAlignment
+        ))
+        let localStride = max(1, stride / 12)
+        let hoverLocationY = hoverLocationY
+        let markerCount = markers.count
+        let expanded = isExpanded
+
+        return Canvas { context, size in
+            guard markerCount > 0 else { return }
+            let trailingX = size.width - (expanded ? 10 : 5)
+
+            for index in markers.indices {
+                let baseY = IndexedScrollRailLayout.verticalPosition(
+                    for: index,
+                    height: height,
+                    markerCount: markerCount
                 )
+                let influence = IndexedScrollRailLayout.influence(
+                    at: baseY,
+                    around: hoverLocationY
+                )
+                let isBaseTick = baseIndices.contains(index)
+                let isLocalTick = expanded
+                    && influence > 0.02
+                    && index.isMultiple(of: localStride)
+                let isMajor = markers[index].majorLabel != nil
+                guard isBaseTick || isLocalTick || isMajor else { continue }
+
+                let y = IndexedScrollRailLayout.magnifiedPosition(
+                    baseY,
+                    around: hoverLocationY
+                )
+                let baseLength: CGFloat = isMajor ? 13 : (isBaseTick ? 7 : 3)
+                let length = baseLength + influence * (isMajor ? 9 : 12)
+                let opacity = isMajor
+                    ? 0.78
+                    : min(0.70, (isBaseTick ? 0.40 : 0.14) + influence * 0.52)
+                let thickness = 1 + influence * 0.8
+                let path = Path(
+                    roundedRect: CGRect(
+                        x: trailingX - length,
+                        y: y - thickness / 2,
+                        width: length,
+                        height: thickness
+                    ),
+                    cornerRadius: thickness / 2
+                )
+                context.fill(path, with: .color(.secondary.opacity(opacity)))
+            }
         }
+        .allowsHitTesting(false)
     }
 
     @ViewBuilder
     private func majorLabels(height: CGFloat) -> some View {
         let indices = IndexedScrollRailLayout.majorLabelIndices(
             markers: markers,
-            maximumCount: max(2, min(12, Int(height / 38)))
+            maximumCount: max(2, min(18, Int(height / 42)))
         )
         ForEach(indices, id: \.self) { index in
             if let label = markers[index].majorLabel {
+                let baseY = IndexedScrollRailLayout.verticalPosition(
+                    for: index,
+                    height: height,
+                    markerCount: markers.count
+                )
+                let y = IndexedScrollRailLayout.magnifiedPosition(
+                    baseY,
+                    around: hoverLocationY
+                )
+                let isNearFocus = focusIndex.map { abs($0 - index) < 2 } ?? false
                 Text(label)
-                    .font(.caption2.monospacedDigit())
+                    .font(.caption2.weight(.medium).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .position(
-                        x: 25,
-                        y: verticalPosition(for: index, height: height)
-                    )
+                    .opacity(isNearFocus ? 0 : 1)
+                    .position(x: 27, y: y)
             }
         }
     }
 
-    private func selectionLabel(for index: Int, height: CGFloat) -> some View {
-        Text(markers[index].label)
-            .font(.caption.weight(.medium).monospacedDigit())
+    private func focusLabel(for index: Int, height: CGFloat) -> some View {
+        let baseY = IndexedScrollRailLayout.verticalPosition(
+            for: index,
+            height: height,
+            markerCount: markers.count
+        )
+        let y = IndexedScrollRailLayout.magnifiedPosition(
+            baseY,
+            around: hoverLocationY
+        )
+        return Text(markers[index].label)
+            .font(.caption2.weight(.semibold).monospacedDigit())
             .lineLimit(1)
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
-            .background(.regularMaterial, in: Capsule(style: .continuous))
-            .shadow(color: .black.opacity(0.14), radius: 4, y: 1)
+            .background(Color.accentColor.opacity(0.18), in: Capsule(style: .continuous))
+            .overlay {
+                Capsule(style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.24), lineWidth: 0.5)
+            }
             .position(
-                x: 34,
-                y: min(max(verticalPosition(for: index, height: height), 16), height - 16)
+                x: 43,
+                y: min(
+                    max(y, IndexedScrollRailLayout.contentInset),
+                    height - IndexedScrollRailLayout.contentInset
+                )
             )
+            .allowsHitTesting(false)
     }
 
-    private func verticalPosition(for index: Int, height: CGFloat) -> CGFloat {
-        guard markers.count > 1 else { return height / 2 }
-        let inset: CGFloat = 10
-        let usableHeight = max(0, height - (inset * 2))
-        return inset + CGFloat(index) / CGFloat(markers.count - 1) * usableHeight
+    private func nearestIndex(to y: CGFloat, height: CGFloat) -> Int? {
+        guard !markers.isEmpty else { return nil }
+        var lower = 0
+        var upper = markers.count - 1
+        while lower < upper {
+            let middle = (lower + upper) / 2
+            let position = renderedPosition(for: middle, height: height)
+            if position < y {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        let candidate = lower
+        guard candidate > 0 else { return candidate }
+        let previous = candidate - 1
+        return abs(renderedPosition(for: previous, height: height) - y)
+            <= abs(renderedPosition(for: candidate, height: height) - y)
+            ? previous
+            : candidate
     }
 
-    private func select(at y: CGFloat, height: CGFloat) {
-        guard let index = IndexedScrollRailLayout.markerIndex(
-            at: y - 10,
-            height: max(0, height - 20),
+    private func renderedPosition(for index: Int, height: CGFloat) -> CGFloat {
+        let baseY = IndexedScrollRailLayout.verticalPosition(
+            for: index,
+            height: height,
             markerCount: markers.count
-        ) else { return }
-        select(index)
+        )
+        return IndexedScrollRailLayout.magnifiedPosition(
+            baseY,
+            around: hoverLocationY
+        )
     }
 
-    private func select(_ index: Int) {
-        guard markers.indices.contains(index), selectedIndex != index else { return }
+    private func select(at y: CGFloat, height: CGFloat, immediate: Bool) {
+        guard let index = nearestIndex(to: y, height: height) else { return }
+        select(index, immediate: immediate)
+    }
+
+    private func select(_ index: Int, immediate: Bool) {
+        guard markers.indices.contains(index) else { return }
         selectedIndex = index
+        pendingIndex = index
+
+        if immediate {
+            dispatchTask?.cancel()
+            dispatchTask = nil
+            dispatchPendingSelection()
+            return
+        }
+
+        guard dispatchTask == nil else { return }
+        dispatchTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled else { return }
+            dispatchTask = nil
+            dispatchPendingSelection()
+        }
+    }
+
+    private func dispatchPendingSelection() {
+        guard let index = pendingIndex else { return }
+        pendingIndex = nil
+        guard markers.indices.contains(index),
+              lastDispatchedIndex != index else { return }
+        lastDispatchedIndex = index
         onSelect(markers[index])
     }
 
@@ -216,10 +490,10 @@ public struct IndexedScrollRail: View {
         switch direction {
         case .increment:
             let current = selectedIndex ?? -1
-            select(min(current + 1, markers.count - 1))
+            select(min(current + 1, markers.count - 1), immediate: true)
         case .decrement:
             let current = selectedIndex ?? 1
-            select(max(current - 1, 0))
+            select(max(current - 1, 0), immediate: true)
         @unknown default:
             break
         }
