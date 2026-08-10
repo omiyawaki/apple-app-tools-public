@@ -111,6 +111,65 @@ final class DesignSystemTests: XCTestCase {
         )
     }
 
+    func testIndexedScrollRailThinsFinalRenderedCoordinates() {
+        let renderedPositions: [CGFloat] = [0, 2, 7, 13, 15, 24]
+
+        XCTAssertEqual(
+            IndexedScrollRailLayout.spacedIndices(
+                Array(renderedPositions.indices),
+                verticalPositions: renderedPositions,
+                minimumSpacing: 5
+            ),
+            [0, 2, 3, 5]
+        )
+    }
+
+    func testIndexedScrollRailHoverGeometryIsWellBelowOneFrame() {
+        let markerCount = 2_000
+        let height: CGFloat = 1_200
+        let normalizedPositions = (0..<markerCount).map {
+            Double($0) / Double(markerCount - 1)
+        }
+        let started = ContinuousClock.now
+        var checksum: CGFloat = 0
+
+        for sample in 0..<200 {
+            let hoverPosition = CGFloat(sample % 100) / 99 * height
+            let positions = normalizedPositions.map {
+                IndexedScrollRailLayout.verticalPosition(
+                    forNormalizedPosition: $0,
+                    height: height
+                )
+            }
+            let stride = IndexedScrollRailLayout.tickStride(
+                markerCount: markerCount,
+                height: height,
+                minimumSpacing: 3,
+                candidates: [1, 3, 6, 12, 24, 60, 120, 240, 600],
+                minimumStride: 12
+            )
+            let indices = IndexedScrollRailLayout.spacedIndices(
+                IndexedScrollRailLayout.tickIndices(
+                    markerCount: markerCount,
+                    stride: stride,
+                    alignment: 7
+                ),
+                verticalPositions: positions,
+                minimumSpacing: 3
+            )
+            for index in indices {
+                checksum += IndexedScrollRailLayout.influence(
+                    at: positions[index],
+                    around: hoverPosition
+                )
+            }
+        }
+
+        let elapsed = (ContinuousClock.now - started) / .milliseconds(1)
+        XCTAssertGreaterThan(checksum, 0)
+        XCTAssertLessThan(elapsed / 200, 1)
+    }
+
     func testIndexedScrollRailKeepsContentOutOfRoundedEndCaps() {
         XCTAssertEqual(
             IndexedScrollRailLayout.verticalPosition(

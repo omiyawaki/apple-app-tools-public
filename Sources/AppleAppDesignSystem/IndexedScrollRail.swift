@@ -132,21 +132,31 @@ public enum IndexedScrollRailLayout {
         height: CGFloat,
         minimumSpacing: CGFloat
     ) -> [Int] {
-        let candidates = candidates.filter { normalizedPositions.indices.contains($0) }
+        spacedIndices(
+            candidates,
+            verticalPositions: normalizedPositions.map {
+                verticalPosition(forNormalizedPosition: $0, height: height)
+            },
+            minimumSpacing: minimumSpacing
+        )
+    }
+
+    /// Removes marks that collide in their final rendered coordinates. This
+    /// supports one continuous, collision-free marker sequence without
+    /// compositing a separate hover-only layer.
+    public static func spacedIndices(
+        _ candidates: [Int],
+        verticalPositions: [CGFloat],
+        minimumSpacing: CGFloat
+    ) -> [Int] {
+        let candidates = candidates.filter { verticalPositions.indices.contains($0) }
         guard let first = candidates.first else { return [] }
         guard candidates.count > 1 else { return [first] }
 
-        func yPosition(for index: Int) -> CGFloat {
-            verticalPosition(
-                forNormalizedPosition: normalizedPositions[index],
-                height: height
-            )
-        }
-
         var result = [first]
-        var lastY = yPosition(for: first)
+        var lastY = verticalPositions[first]
         for candidate in candidates.dropFirst() {
-            let y = yPosition(for: candidate)
+            let y = verticalPositions[candidate]
             if y - lastY >= minimumSpacing {
                 result.append(candidate)
                 lastY = y
@@ -154,10 +164,10 @@ public enum IndexedScrollRailLayout {
         }
 
         if let last = candidates.last, result.last != last {
-            let lastPosition = yPosition(for: last)
+            let lastPosition = verticalPositions[last]
             if result.count > 1,
                let previous = result.last,
-               lastPosition - yPosition(for: previous) < minimumSpacing {
+               lastPosition - verticalPositions[previous] < minimumSpacing {
                 result.removeLast()
             }
             result.append(last)
@@ -218,8 +228,8 @@ public enum IndexedScrollRailLayout {
 
 /// A compact, native-feeling chronology/index rail that complements rather
 /// than replaces the system scrollbar. It uses one Canvas for all tick marks,
-/// expands on hover, and applies Dock-like local magnification around the
-/// pointer. Drag selection is coalesced to one callback per display frame.
+/// expands on hover, and magnifies one stable tick sequence around the pointer.
+/// Drag selection is coalesced to one callback per display frame.
 public struct IndexedScrollRail: View {
     private let markers: [IndexedScrollRailMarker]
     private let tickStrideCandidates: [Int]
@@ -357,51 +367,45 @@ public struct IndexedScrollRail: View {
             minimumStride: minimumTickStride
         )
         let normalizedPositions = markerNormalizedPositions
-        let baseIndices = Set(IndexedScrollRailLayout.spacedIndices(
+        let basePositions = normalizedPositions.map {
+            IndexedScrollRailLayout.verticalPosition(
+                forNormalizedPosition: $0,
+                height: height
+            )
+        }
+        let visibleIndices = IndexedScrollRailLayout.spacedIndices(
             IndexedScrollRailLayout.tickIndices(
                 markerCount: markers.count,
                 stride: stride,
                 alignment: tickAlignment
             ),
-            normalizedPositions: normalizedPositions,
-            height: height,
+            verticalPositions: basePositions,
             minimumSpacing: 3
-        ))
-        let localStride = max(1, stride / 12)
+        )
         let hoverLocationY = hoverLocationY
-        let markerCount = markers.count
         let expanded = isExpanded
 
         return Canvas { context, size in
-            guard markerCount > 0 else { return }
+            guard !visibleIndices.isEmpty else { return }
             let trailingX = size.width - (expanded ? 10 : 5)
 
-            for index in markers.indices {
-                let baseY = baseVerticalPosition(for: index, height: height)
+            for index in visibleIndices {
+                let baseY = basePositions[index]
                 let influence = IndexedScrollRailLayout.influence(
                     at: baseY,
                     around: hoverLocationY
                 )
-                let isBaseTick = baseIndices.contains(index)
-                let isLocalTick = expanded
-                    && influence > 0.02
-                    && index.isMultiple(of: localStride)
                 let isMajor = markers[index].majorLabel != nil
-                guard isBaseTick || isLocalTick || isMajor else { continue }
-
-                let y = IndexedScrollRailLayout.magnifiedPosition(
-                    baseY,
-                    around: hoverLocationY
-                )
-                let baseLength: CGFloat = isMajor ? 13 : (isBaseTick ? 7 : 3)
-                // Dock-like magnification is expressed primarily by vertical
-                // separation. Keeping horizontal growth restrained avoids the
-                // opaque wedge or “fin” silhouette around the pointer.
-                let length = baseLength + influence * (isMajor ? 2 : 2.5)
+                let y = baseY
+                let baseLength: CGFloat = isMajor ? 13 : 7
+                // As with Dock icons, the existing item grows under the
+                // pointer. Keeping every mark at its stable vertical position
+                // avoids compressed bands at the edges of the hover region.
+                let length = baseLength + influence * (isMajor ? 4 : 5)
                 let opacity = isMajor
                     ? 0.78
-                    : min(0.62, (isBaseTick ? 0.40 : 0.14) + influence * 0.34)
-                let thickness = 1 + influence * 0.25
+                    : min(0.72, 0.40 + influence * 0.32)
+                let thickness = 1 + influence * 0.35
                 let path = Path(
                     roundedRect: CGRect(
                         x: trailingX - length,
@@ -432,10 +436,7 @@ public struct IndexedScrollRail: View {
         ForEach(indices, id: \.self) { index in
             if let label = markers[index].majorLabel {
                 let baseY = baseVerticalPosition(for: index, height: height)
-                let y = IndexedScrollRailLayout.magnifiedPosition(
-                    baseY,
-                    around: hoverLocationY
-                )
+                let y = baseY
                 let isNearFocus = focusIndex.map { abs($0 - index) < 2 } ?? false
                 Text(label)
                     .font(.caption2.weight(.medium).monospacedDigit())
@@ -449,10 +450,7 @@ public struct IndexedScrollRail: View {
 
     private func focusLabel(for index: Int, height: CGFloat) -> some View {
         let baseY = baseVerticalPosition(for: index, height: height)
-        let y = IndexedScrollRailLayout.magnifiedPosition(
-            baseY,
-            around: hoverLocationY
-        )
+        let y = baseY
         return Text(markers[index].label)
             .font(.caption2.weight(.semibold).monospacedDigit())
             .foregroundStyle(.primary)
@@ -492,11 +490,7 @@ public struct IndexedScrollRail: View {
     }
 
     private func renderedPosition(for index: Int, height: CGFloat) -> CGFloat {
-        let baseY = baseVerticalPosition(for: index, height: height)
-        return IndexedScrollRailLayout.magnifiedPosition(
-            baseY,
-            around: hoverLocationY
-        )
+        baseVerticalPosition(for: index, height: height)
     }
 
     private func baseVerticalPosition(for index: Int, height: CGFloat) -> CGFloat {
