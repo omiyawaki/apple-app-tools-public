@@ -234,6 +234,8 @@ public struct IndexedScrollRail: View {
     private let markers: [IndexedScrollRailMarker]
     private let tickStrideCandidates: [Int]
     private let minimumTickStride: Int
+    private let minimumTickSpacing: CGFloat
+    private let magnificationIntensity: CGFloat
     private let tickAlignment: Int
     private let onSelect: (IndexedScrollRailMarker) -> Void
 
@@ -249,12 +251,16 @@ public struct IndexedScrollRail: View {
         markers: [IndexedScrollRailMarker],
         tickStrideCandidates: [Int] = [1, 2, 5, 10, 20, 50, 100],
         minimumTickStride: Int = 1,
+        minimumTickSpacing: CGFloat = 3,
+        magnificationIntensity: CGFloat = 1,
         tickAlignment: Int = 0,
         onSelect: @escaping (IndexedScrollRailMarker) -> Void
     ) {
         self.markers = markers
         self.tickStrideCandidates = tickStrideCandidates
         self.minimumTickStride = max(1, minimumTickStride)
+        self.minimumTickSpacing = max(1, minimumTickSpacing)
+        self.magnificationIntensity = max(0, magnificationIntensity)
         self.tickAlignment = tickAlignment
         self.onSelect = onSelect
     }
@@ -362,7 +368,7 @@ public struct IndexedScrollRail: View {
         let stride = IndexedScrollRailLayout.tickStride(
             markerCount: markers.count,
             height: height,
-            minimumSpacing: 3,
+            minimumSpacing: minimumTickSpacing,
             candidates: tickStrideCandidates,
             minimumStride: minimumTickStride
         )
@@ -380,10 +386,13 @@ public struct IndexedScrollRail: View {
                 alignment: tickAlignment
             ),
             verticalPositions: basePositions,
-            minimumSpacing: 3
+            minimumSpacing: minimumTickSpacing
         )
         let hoverLocationY = hoverLocationY
         let expanded = isExpanded
+        let intensity = magnificationIntensity
+        let influenceRadius = IndexedScrollRailLayout.magnificationRadius
+            * (1 + max(0, intensity - 1) * 0.3)
 
         return Canvas { context, size in
             guard !visibleIndices.isEmpty else { return }
@@ -393,7 +402,8 @@ public struct IndexedScrollRail: View {
                 let baseY = basePositions[index]
                 let influence = IndexedScrollRailLayout.influence(
                     at: baseY,
-                    around: hoverLocationY
+                    around: hoverLocationY,
+                    radius: influenceRadius
                 )
                 let isMajor = markers[index].majorLabel != nil
                 let y = baseY
@@ -401,11 +411,11 @@ public struct IndexedScrollRail: View {
                 // As with Dock icons, the existing item grows under the
                 // pointer. Keeping every mark at its stable vertical position
                 // avoids compressed bands at the edges of the hover region.
-                let length = baseLength + influence * (isMajor ? 4 : 5)
-                let opacity = isMajor
-                    ? 0.78
-                    : min(0.72, 0.40 + influence * 0.32)
-                let thickness = 1 + influence * 0.35
+                let expansion = (isMajor ? 5 : 6) * intensity
+                let length = baseLength + influence * expansion
+                let baseOpacity = isMajor ? 0.70 : 0.38
+                let opacity = min(0.92, baseOpacity + influence * 0.26 * intensity)
+                let thickness = 1 + influence * 0.45 * intensity
                 let path = Path(
                     roundedRect: CGRect(
                         x: trailingX - length,
@@ -437,7 +447,16 @@ public struct IndexedScrollRail: View {
             if let label = markers[index].majorLabel {
                 let baseY = baseVerticalPosition(for: index, height: height)
                 let y = baseY
-                let isNearFocus = focusIndex.map { abs($0 - index) < 2 } ?? false
+                let focusY = focusIndex.map {
+                    min(
+                        max(
+                            baseVerticalPosition(for: $0, height: height),
+                            IndexedScrollRailLayout.contentInset
+                        ),
+                        height - IndexedScrollRailLayout.contentInset
+                    )
+                }
+                let isNearFocus = focusY.map { abs($0 - y) < 22 } ?? false
                 Text(label)
                     .font(.caption2.weight(.medium).monospacedDigit())
                     .foregroundStyle(.secondary)

@@ -97,6 +97,16 @@ final class DesignSystemTests: XCTestCase {
             ),
             12
         )
+        XCTAssertEqual(
+            IndexedScrollRailLayout.tickStride(
+                markerCount: 2_000,
+                height: 800,
+                minimumSpacing: 2,
+                candidates: [1, 3, 6, 12, 24, 60],
+                minimumStride: 3
+            ),
+            6
+        )
     }
 
     func testIndexedScrollRailThinsCollisionsAndPreservesEndpoints() {
@@ -144,9 +154,9 @@ final class DesignSystemTests: XCTestCase {
             let stride = IndexedScrollRailLayout.tickStride(
                 markerCount: markerCount,
                 height: height,
-                minimumSpacing: 3,
+                minimumSpacing: 2,
                 candidates: [1, 3, 6, 12, 24, 60, 120, 240, 600],
-                minimumStride: 12
+                minimumStride: 3
             )
             let indices = IndexedScrollRailLayout.spacedIndices(
                 IndexedScrollRailLayout.tickIndices(
@@ -155,7 +165,7 @@ final class DesignSystemTests: XCTestCase {
                     alignment: 7
                 ),
                 verticalPositions: positions,
-                minimumSpacing: 3
+                minimumSpacing: 2
             )
             for index in indices {
                 checksum += IndexedScrollRailLayout.influence(
