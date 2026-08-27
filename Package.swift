@@ -49,6 +49,7 @@ let package = Package(
                 "AppleAppDesignSystem",
                 "LocalAppUpdateKit",
                 "MacAppPackager",
+                "IconComposerBuild",
                 "AutoDeployCore"
             ]
         )

@@ -34,6 +34,7 @@ public enum CommandLineTool {
       --ictool PATH                    Icon Composer ictool path.
       --rendition-size PX              Preview rendition size. Default: 1024.
       --renditions A,B,C               Renditions to export.
+      --design-generation 26|27        Icon rendering generation passed to ictool.
       --no-png                         Do not write AppIcon.png.
       --no-icns                        Do not copy AppIcon.icns when actool emits one.
       --no-assets-car                  Do not copy Assets.car.

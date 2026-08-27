@@ -17,6 +17,7 @@ public struct IconComposerBuilder {
         let iconutil = URL(fileURLWithPath: "/usr/bin/iconutil")
         let actoolOutput = options.work.appendingPathComponent("actool", isDirectory: true)
         let iconset = options.work.appendingPathComponent("\(options.name).iconset", isDirectory: true)
+        let reviewIconset = options.work.appendingPathComponent("\(options.name)-review.iconset", isDirectory: true)
 
         try resetDirectory(options.work)
         try fileManager.createDirectory(at: options.out, withIntermediateDirectories: true)
@@ -32,7 +33,8 @@ public struct IconComposerBuilder {
         try exportIconset(ictool: ictool, iconutil: iconutil, actoolOutput: actoolOutput, iconset: iconset)
 
         if let reviewSheet = options.reviewSheet {
-            try ReviewSheetWriter.write(iconset: iconset, output: reviewSheet)
+            try exportRenderedIconset(ictool: ictool, iconset: reviewIconset)
+            try ReviewSheetWriter.write(iconset: reviewIconset, output: reviewSheet)
         }
 
         if let plist = options.verifyPlist {
@@ -75,9 +77,7 @@ public struct IconComposerBuilder {
     private func exportRenditions(ictool: URL, review: URL) throws {
         for rendition in options.renditions {
             let output = review.appendingPathComponent("rendition-\(rendition).png")
-            try run(
-                ictool,
-                [
+            try run(ictool, withDesignGeneration([
                     options.icon.path,
                     "--export-image",
                     "--output-file", output.path,
@@ -86,8 +86,7 @@ public struct IconComposerBuilder {
                     "--width", String(options.renditionSize),
                     "--height", String(options.renditionSize),
                     "--scale", "1"
-                ]
-            )
+            ]))
         }
     }
 
@@ -130,9 +129,7 @@ public struct IconComposerBuilder {
             return
         }
 
-        try run(
-            ictool,
-            [
+        try run(ictool, withDesignGeneration([
                 options.icon.path,
                 "--export-image",
                 "--output-file", options.out.appendingPathComponent("\(options.name).png").path,
@@ -141,8 +138,7 @@ public struct IconComposerBuilder {
                 "--width", String(options.renditionSize),
                 "--height", String(options.renditionSize),
                 "--scale", "1"
-            ]
-        )
+        ]))
     }
 
     private func exportIconset(ictool: URL, iconutil: URL, actoolOutput: URL, iconset: URL) throws {
@@ -154,6 +150,10 @@ public struct IconComposerBuilder {
             }
         }
 
+        try exportRenderedIconset(ictool: ictool, iconset: iconset)
+    }
+
+    private func exportRenderedIconset(ictool: URL, iconset: URL) throws {
         try fileManager.createDirectory(at: iconset, withIntermediateDirectories: true)
         let exports: [(Int, String)] = [
             (16, "icon_16x16.png"),
@@ -169,9 +169,7 @@ public struct IconComposerBuilder {
         ]
 
         for (pixels, file) in exports {
-            try run(
-                ictool,
-                [
+            try run(ictool, withDesignGeneration([
                     options.icon.path,
                     "--export-image",
                     "--output-file", iconset.appendingPathComponent(file).path,
@@ -180,9 +178,15 @@ public struct IconComposerBuilder {
                     "--width", String(pixels),
                     "--height", String(pixels),
                     "--scale", "1"
-                ]
-            )
+            ]))
         }
+    }
+
+    private func withDesignGeneration(_ arguments: [String]) -> [String] {
+        guard let designGeneration = options.designGeneration else {
+            return arguments
+        }
+        return arguments + ["--design-generation", String(designGeneration)]
     }
 
     private func copyReplacing(_ source: URL, to destination: URL) throws {

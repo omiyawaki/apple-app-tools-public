@@ -14,6 +14,7 @@ public struct BuildOptions: Equatable {
     public var verifyPlist: URL?
     public var renditionSize: Int
     public var renditions: [String]
+    public var designGeneration: Int?
     public var writesPNG: Bool
     public var writesICNS: Bool
     public var writesAssetsCar: Bool
@@ -32,6 +33,7 @@ public struct BuildOptions: Equatable {
         verifyPlist: URL? = nil,
         renditionSize: Int = 1024,
         renditions: [String] = ["Default", "Dark", "ClearLight", "ClearDark", "TintedLight", "TintedDark"],
+        designGeneration: Int? = nil,
         writesPNG: Bool = true,
         writesICNS: Bool = true,
         writesAssetsCar: Bool = true
@@ -49,6 +51,7 @@ public struct BuildOptions: Equatable {
         self.verifyPlist = verifyPlist
         self.renditionSize = renditionSize
         self.renditions = renditions
+        self.designGeneration = designGeneration
         self.writesPNG = writesPNG
         self.writesICNS = writesICNS
         self.writesAssetsCar = writesAssetsCar
@@ -72,7 +75,8 @@ public struct BuildOptions: Equatable {
                 index += 1
             case "--icon", "--name", "--out", "--work", "--review", "--review-sheet",
                  "--platform", "--actool-platform", "--minimum-deployment-target",
-                 "--ictool", "--verify-plist", "--rendition-size", "--renditions":
+                 "--ictool", "--verify-plist", "--rendition-size", "--renditions",
+                 "--design-generation":
                 guard index + 1 < arguments.count else {
                     throw BuildError("Missing value for \(argument).")
                 }
@@ -105,6 +109,16 @@ public struct BuildOptions: Equatable {
             throw BuildError("--renditions must contain at least one rendition.")
         }
 
+        let designGeneration: Int?
+        if let rawDesignGeneration = values["--design-generation"] {
+            guard let value = Int(rawDesignGeneration), [26, 27].contains(value) else {
+                throw BuildError("--design-generation must be 26 or 27.")
+            }
+            designGeneration = value
+        } else {
+            designGeneration = nil
+        }
+
         return BuildOptions(
             icon: URL(fileURLWithPath: iconPath),
             name: values["--name"] ?? "AppIcon",
@@ -119,6 +133,7 @@ public struct BuildOptions: Equatable {
             verifyPlist: values["--verify-plist"].map { URL(fileURLWithPath: $0) },
             renditionSize: size,
             renditions: renditions,
+            designGeneration: designGeneration,
             writesPNG: !flags.contains("--no-png"),
             writesICNS: !flags.contains("--no-icns"),
             writesAssetsCar: !flags.contains("--no-assets-car")
