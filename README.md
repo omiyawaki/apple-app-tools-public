@@ -1,14 +1,46 @@
 # apple-app-tools
 
-Reusable local tooling for Apple-platform apps.
+A SwiftPM toolkit for building and shipping small macOS and iOS apps without
+rewriting the same plumbing in every project.
 
-This repo is the source of truth for app-building pieces that should not be
-rebuilt separately in each app. Apps describe their architecture in
-`AppleAppBlueprint.yaml`, import shared SwiftPM modules from this package, and
-generate an `APPLE_APP_MAP.md` so anyone can see how the app is put
-together before editing it.
+## Why
 
-## Commands
+I maintain several personal Apple-platform apps. They all need the same things:
+a consistent way to package a `.app` bundle and sign it, an icon build step, a
+shared SwiftUI look, and a way to tell when the installed app is older than the
+source. This package holds those pieces in one place so each app only keeps
+what is specific to it.
+
+## What is in it
+
+- `AppleAppBlueprint`: parses an `AppleAppBlueprint.yaml` that describes an
+  app's architecture, renders it to an `APPLE_APP_MAP.md`, and guards against
+  duplicating shared components.
+- `AppleAppDesignSystem`: shared SwiftUI components, including an indexed scroll
+  rail and a local-update toolbar button.
+- `LocalAppUpdateKit`: detects when an installed app is behind its source (it
+  watches the source tree with FSEvents) and supports redeploy and reopen.
+- `MacAppPackager`: assembles and signs a `.app` bundle from a SwiftPM
+  executable, auto-detecting a code-signing identity.
+- `IconComposerBuild`: turns an Icon Composer `.icon` file into the assets Xcode
+  expects, plus a small-size review sheet.
+- `AutoDeployCore` and the `auto-deploy` command: propagate a verified build to
+  other Macs over Tailscale using launchd agents.
+
+## Requirements
+
+- macOS 26 or later
+- Swift 6.2 (Xcode 26 or the matching toolchain)
+- Tailscale, only for `auto-deploy`
+
+## Build and test
+
+```bash
+swift build
+swift test
+```
+
+## Usage
 
 ```bash
 swift run apple-app-tools blueprint validate --config AppleAppBlueprint.yaml
@@ -19,18 +51,8 @@ swift run apple-app-tools mac package --config AppleAppBlueprint.yaml --binary .
 swift run apple-app-tools icon build --icon Resources/AppIcon.icon --name AppIcon --out Resources
 ```
 
-## Modules
+Each module has a short page under `docs/`.
 
-- `AppleAppBlueprint`: blueprint parser, component registry, map renderer, and
-  duplicate guard.
-- `AppleAppDesignSystem`: shared SwiftUI visual language.
-- `LocalAppUpdateKit`: local update detection and redeploy/reopen support.
-- `MacAppPackager`: shared `.app` bundle packaging and metadata writing.
-- `IconComposerBuild`: Icon Composer asset pipeline, exposed via the
-  `apple-app-tools icon build` command.
+## License
 
-## Test
-
-```bash
-swift test
-```
+MIT. See `LICENSE`.
